@@ -11,40 +11,40 @@ topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
 @functions_framework.http
 def main(request):
     """
-    Función HTTP que recibe un webhook, que puede contener un lote de registros.
-    Desagrega el lote y publica cada registro como un mensaje individual en Pub/Sub.
+    Función HTTP que recibe un lote de registros, lo desagrega y publica cada
+    registro como un mensaje individual en Pub/Sub de forma asíncrona y eficiente.
     """
     payload = request.get_data()
     
     if not payload:
-        # Maneja la verificación del webhook como antes
         print(json.dumps({"severity": "INFO", "message": "Petición de verificación recibida."}))
         return ("Endpoint verificado.", 200)
 
     try:
-        # Decodifica el payload y lo carga como un objeto Python (puede ser una lista o un dict)
         data = json.loads(payload)
+        publish_futures = [] # Una lista para guardar los "futuros" de cada publicación
         
-        messages_published = 0
-        
-        # --- LÓGICA DE DESAGREGACIÓN ---
-        # Comprueba si los datos recibidos son una lista (un lote de registros)
         if isinstance(data, list):
-            print(json.dumps({"severity": "INFO", "message": f"Lote de {len(data)} registros recibido. Desagregando..."}))
-            # Itera sobre cada registro en la lista
+            print(json.dumps({"severity": "INFO", "message": f"Lote de {len(data)} registros recibido. Preparando para publicación asíncrona..."}))
             for item in data:
-                # Convierte cada registro individual a un string JSON y luego a bytes
                 message_bytes = json.dumps(item).encode('utf-8')
-                # Publica el registro individual como un mensaje separado
-                publisher.publish(topic_path, message_bytes).result()
-                messages_published += 1
+                # --- LÓGICA CORREGIDA ---
+                # Disparamos la publicación pero NO esperamos aquí.
+                # Guardamos el objeto 'future' en nuestra lista.
+                future = publisher.publish(topic_path, message_bytes)
+                publish_futures.append(future)
         else:
-            # Si no es una lista, es un único registro. Lo publicamos directamente.
-            print(json.dumps({"severity": "INFO", "message": "Registro único recibido. Publicando..."}))
-            publisher.publish(topic_path, payload).result()
-            messages_published = 1
+            # Si es un solo registro, lo manejamos igual
+            future = publisher.publish(topic_path, payload)
+            publish_futures.append(future)
 
-        success_message = f"{messages_published} mensajes publicados exitosamente en Pub/Sub."
+        # --- ESPERA CONJUNTA ---
+        # Después de haber disparado todas las publicaciones, ahora sí esperamos
+        # a que todas terminen.
+        for future in publish_futures:
+            future.result() # El .result() aquí bloqueará hasta que este futuro específico esté completo.
+
+        success_message = f"{len(publish_futures)} mensajes publicados exitosamente en Pub/Sub."
         print(json.dumps({"severity": "INFO", "message": success_message}))
         return (success_message, 200)
 
